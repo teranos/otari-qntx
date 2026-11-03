@@ -1,0 +1,4 @@
+# go.mod's replace target: the pinned QNTX, linked by the dev shell.
+/qntx
+/result*
+/vendor
