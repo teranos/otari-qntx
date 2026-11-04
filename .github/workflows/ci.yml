@@ -1,0 +1,38 @@
+# A node builds a pushed commit once every GitHub Actions check on it passed
+# (QNTX ADR-002), and a commit with no check is built untested. These are the
+# checks: the flake's own (the unit tests, and the e2e check that drives the
+# built binary against otari in the sandbox), then the node's build as its
+# record names it (build.command `nix build`, build.output
+# `result/bin/qntx-otari-plugin`) and the word the node reads off the binary.
+name: ci
+
+on:
+  push:
+    branches: [plugin, main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: nix flake check
+        run: nix flake check -L --show-trace
+      - name: The node's build
+        run: nix build -L
+      - name: The word the node reads
+        run: |
+          said=$(result/bin/qntx-otari-plugin --version | head -n 1)
+          echo "$said"
+          case "$said" in
+            "qntx-otari-plugin "*) ;;
+            *) echo "the node installs this as qntx-otari-plugin and reads that name back" >&2; exit 1 ;;
+          esac

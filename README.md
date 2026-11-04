@@ -24,7 +24,7 @@ Pinned (flake.lock): QNTX `84bbc37cfb6cc18668cac1320c23cc08b8244ce4`, otari `ca0
 
 ## Configuration
 
-The plugin is its record on the node ([ADR-002](https://github.com/teranos/QNTX/blob/main/docs/adr/ADR-002-plugin-configuration.md)): `plugins_add https://github.com/teranos/otari-qntx`, `PUT /api/plugins/otari/config` with the keys below, `plugins_enable`. Its `build.*` keys: `build.core` `github.com/teranos/otari-qntx@main`, `build.command` `nix build`, `build.output` `result/bin/qntx-otari-plugin`.
+The plugin is its record on the node ([ADR-002](https://github.com/teranos/QNTX/blob/main/docs/adr/ADR-002-plugin-configuration.md)): `plugins_add https://github.com/teranos/otari-qntx/tree/plugin/otari`, `PUT /api/plugins/otari/config` with the keys below, `plugins_enable`. The record's name is the URL's last segment, and the node reads `qntx-<that name>-plugin` back from the built binary's `--version`: the tree URL ending in `otari` names it `otari`, where the repository URL alone would name it `otari-qntx` and the build would be refused. Its `build.*` keys: `build.core` `github.com/teranos/otari-qntx@plugin`, `build.command` `nix build`, `build.output` `result/bin/qntx-otari-plugin`. `.github/workflows/ci.yml` is the checks the node waits on before it builds a pushed commit.
 
 | Key | |
 |---|---|
