@@ -152,6 +152,9 @@
       packages = forAll (pkgs: {
         default = pluginFor pkgs;
         qntx-otari-plugin = pluginFor pkgs;
+        # otari itself, as the e2e check runs it: what a node that is not
+        # NixOS runs beside the plugin (`nix build .#otari`, result/bin/otari).
+        otari = otariFor pkgs;
       });
 
       apps = forAll (pkgs: {

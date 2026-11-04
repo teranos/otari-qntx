@@ -34,7 +34,7 @@ The plugin is its record on the node ([ADR-002](https://github.com/teranos/QNTX/
 | `api_key_file` | A file holding the otari API key the node calls with. Without it, `OTARI_API_KEY` from the plugin's environment. The key is never in the plugin's config record. |
 | `timeout_seconds` | How long one call, its stream included, may take. 300 when unset. |
 
-Mint the key with otari's master key: `curl -X POST $OTARI/api/v1/keys -H "Authorization: Bearer $OTARI_MASTER_KEY" -d '{"key_name":"qntx"}'`. Run otari itself with its flake's NixOS module (`services.otari`).
+Mint the key with otari's master key: `curl -X POST $OTARI/api/v1/keys -H "Authorization: Bearer $OTARI_MASTER_KEY" -d '{"key_name":"qntx"}'`. Run otari itself with its flake's NixOS module (`services.otari`). On a node that is not NixOS, this flake's `otari` package is otari as the e2e check runs it: `nix build github:teranos/otari-qntx/plugin#otari`, then `result/bin/otari serve --config <config.yml> --database-url sqlite:///<file> --host 127.0.0.1 --port 8000` with `OTARI_MASTER_KEY` and the secrets config.yml names in its environment.
 
 ## Contract
 
