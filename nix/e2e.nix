@@ -54,9 +54,24 @@ pkgs.stdenv.mkDerivation {
           on_failure:
             - secondary:good-model
     bootstrap_api_key: false
+    budgets:
+      e2e-end-user: {max_budget: 1.0, reset_alignment: calendar_day}
+      e2e-spent: {max_budget: 0.000001, reset_alignment: calendar_day}
+      e2e-ceiling: {max_budget: 100, reset_alignment: calendar_day}
+    api_keys:
+      qntx-gateway:
+        secret: \''${E2E_SERVICE_KEY}
+        user_id: qntx-gateway
+        is_service_key: true
+        end_user_budget_ids: [e2e-end-user, e2e-spent]
+        end_user_budget_id: e2e-end-user
+        ceiling: e2e-ceiling
     EOF
 
     export MOCK_UPSTREAM_KEY=sk-mock-upstream OTARI_MASTER_KEY=e2e-master-key-0123456789abcdef
+    # The service key the gateway test calls with: a secret of the form otari mints.
+    export E2E_SERVICE_KEY=$(python3 -c "import secrets; print('tk-' + secrets.token_urlsafe(48))")
+    printf %s "$E2E_SERVICE_KEY" > $TMPDIR/otari-service-key
     export OTARI_PROVIDER_ALLOW_PRIVATE_HOSTS=true
     ${otari}/bin/otari serve --config $TMPDIR/otari.yml --database-url "sqlite:///$TMPDIR/otari.db" \
       --host 127.0.0.1 --port 18000 > $TMPDIR/otari.log 2>&1 &
@@ -77,9 +92,12 @@ pkgs.stdenv.mkDerivation {
     OTARI_E2E_PROVIDER=secondary \
     OTARI_E2E_MODEL=good-model \
     OTARI_E2E_COST=0.000023 \
+    OTARI_E2E_SERVICE_KEY_FILE=$TMPDIR/otari-service-key \
+    OTARI_E2E_SPENT_BUDGET=e2e-spent \
       go test -tags e2e -count=1 -v ./e2e/ 2>&1 | tee $TMPDIR/e2e.log
     test ''${PIPESTATUS[0]} -eq 0 || { cat $TMPDIR/otari.log; exit 1; }
     grep -q -- '--- PASS: TestE2E_TheNodesCallsThroughThePluginToOtari' $TMPDIR/e2e.log
+    grep -q -- '--- PASS: TestE2E_TheGatewayBillsWhoTheNodeAdmitted' $TMPDIR/e2e.log
 
     kill $otari $mock
     mkdir -p $out

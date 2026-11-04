@@ -100,7 +100,7 @@
         in
         pkgs.buildGoModule {
           pname = "qntx-otari-plugin";
-          version = "0.1.0";
+          version = "0.2.0";
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
@@ -131,7 +131,7 @@
           ldflags = [
             "-s"
             "-w"
-            "-X github.com/teranos/otari-qntx/plugin.Version=0.1.0"
+            "-X github.com/teranos/otari-qntx/plugin.Version=0.2.0"
           ];
           # The unit tests (subPackages would test only cmd/); e2e/ is behind
           # its build tag and runs in checks.e2e.

@@ -10,6 +10,8 @@ QNTX's LLM provider ([ADR-014](https://github.com/teranos/QNTX/blob/main/docs/ad
 
 The node calls `services.LLM()` / `/api/prompt/direct` with `provider: otari`; the plugin serves QNTX's `LLMService` (`plugin/grpc/protocol/llm.proto`: `Chat` and `StreamChat`) by calling otari's `POST /api/v1/chat/completions`, and answers with what otari reported of how it served the call.
 
+An agent harness asks `POST /api/otari/v1/chat/completions` on the node, the route openrouter-qntx served as `/api/openrouter-qntx/v1/chat/completions`: see The gateway.
+
 ## Build
 
 ```
@@ -57,6 +59,29 @@ Mint the key with otari's master key: `curl -X POST $OTARI/api/v1/keys -H "Autho
 - **otari's refusals keep their words.** Its status maps to a gRPC code (400 → `INVALID_ARGUMENT`, 401 → `UNAUTHENTICATED`, 402/424 → `FAILED_PRECONDITION`, 403 → `PERMISSION_DENIED`, 404 → `NOT_FOUND`, 429 → `RESOURCE_EXHAUSTED`, 5xx → `UNAVAILABLE`, an error inside a begun stream → `ABORTED`); the message keeps otari's status, `Otari-Error-Code`, detail and `Otari-Request-ID`.
 
 All of the above was read from otari's source at the pinned commit and checked against a running otari: `e2e/` drives the built binary as the node does (Initialize, then `Chat` and `StreamChat`) through a routing policy that falls over, and compares the cost and tokens reported with otari's own usage record for the request id. QNTX's `plugin/grpc/services/llm_served_e2e_test.go` runs the node's `LLMServer` and `GRPCLLMClient` against the running plugin.
+
+## The gateway
+
+`POST /api/otari/v1/chat/completions` is OpenAI's chat completions. The body goes to otari as it came, tools and `stream` included, with the plugin's otari key and never the caller's credential. otari's answer comes back whole: its status, `Content-Type`, `Otari-*` headers, `Retry-After` and body. A streamed answer arrives as the whole of its events at once, because the node hands a plugin's answer over in one piece.
+
+Who asked is otari's end user. The node says who it admitted in headers a caller cannot set (`X-Qntx-Asker-Did`, the token that asked; `X-Qntx-Asker-User`, the user); the gateway writes the token's DID, else the user, into the body's `user`, over whatever the caller put there. When the plugin's key is an otari [service key](https://github.com/mozilla-ai/otari/blob/ca0231e6e1694c6cee8bf7467779183b48739981/docs/access-control.md#service-keys-and-end-users), otari bills each end user apart, holds each to the key's end-user budget before it dispatches, and pools them under the key's ceiling. A token out of budget gets otari's 403 with `Otari-Error-Code: budget_exceeded`; the others are still served. In otari's config.yml:
+
+```yaml
+budgets:
+  per-asker: {max_budget: <USD>, reset_alignment: calendar_day}
+  qntx-ceiling: {max_budget: <USD>, reset_alignment: calendar_month}
+api_keys:
+  qntx:
+    secret: ${OTARI_QNTX_KEY}      # the key in the plugin's api_key_file
+    user_id: qntx
+    is_service_key: true
+    end_user_budget_id: per-asker
+    ceiling: qntx-ceiling
+```
+
+`LLMService` calls (`services.LLM()`, `/api/prompt/direct`) name no end user: `LLMChatRequest` does not say who asked, so they bill the key's own user, under the same ceiling.
+
+`e2e/` asks the gateway as the node does, on a service key, against a running otari: the asker becomes otari's end user, one put on a budget no call fits in is refused, and another is served after it.
 
 ## Limits
 

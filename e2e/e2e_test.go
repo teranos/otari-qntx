@@ -15,6 +15,9 @@
 //	OTARI_E2E_PROVIDER    the instance that serves the policy's fallback
 //	OTARI_E2E_MODEL       the model it is sent
 //	OTARI_E2E_COST        the cost otari settles for one call (decimal text)
+//	OTARI_E2E_SERVICE_KEY_FILE  a file holding an otari service key whose end
+//	                      users start on a budget with room
+//	OTARI_E2E_SPENT_BUDGET  a budget on that key's list no call fits in
 package e2e
 
 import (
@@ -24,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -219,5 +223,107 @@ func TestE2E_TheNodesCallsThroughThePluginToOtari(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, codes.FailedPrecondition, status.Code(err), err.Error())
 		assert.Contains(t, err.Error(), "Otari-Request-ID")
+	})
+}
+
+// headerOf is one header of a plugin's answer.
+func headerOf(resp *protocol.HTTPResponse, name string) string {
+	for _, h := range resp.Headers {
+		if http.CanonicalHeaderKey(h.Name) == http.CanonicalHeaderKey(name) && len(h.Values) > 0 {
+			return h.Values[0]
+		}
+	}
+	return ""
+}
+
+// asService asks otari's end-user routes with the service key, as the service
+// the key belongs to.
+func asService(t *testing.T, method, path, body string) (int, string) {
+	key, err := os.ReadFile(env(t, "OTARI_E2E_SERVICE_KEY_FILE"))
+	require.NoError(t, err)
+	req, err := http.NewRequest(method, env(t, "OTARI_E2E_URL")+path, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(key)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(raw)
+}
+
+// The gateway route, asked as the node asks it (HandleHTTP, the path below
+// /api/otari, the asker headers the node sets), on a service key: who the node
+// admitted is the end user otari bills and caps, and one of them out of budget
+// is refused while another is served.
+func TestE2E_TheGatewayBillsWhoTheNodeAdmitted(t *testing.T) {
+	upstream := env(t, "OTARI_E2E_PROVIDER")
+	model := env(t, "OTARI_E2E_MODEL")
+	spent := env(t, "OTARI_E2E_SPENT_BUDGET")
+	conn := startPlugin(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	domain := protocol.NewDomainPluginServiceClient(conn)
+	_, err := domain.Initialize(ctx, &protocol.InitializeRequest{Config: map[string]string{
+		"otari_url":    env(t, "OTARI_E2E_URL"),
+		"api_key_file": env(t, "OTARI_E2E_SERVICE_KEY_FILE"),
+	}})
+	require.NoError(t, err)
+
+	ask := func(t *testing.T, asker string) *protocol.HTTPResponse {
+		body, err := json.Marshal(map[string]any{
+			"model":      upstream + ":" + model,
+			"max_tokens": 64,
+			"user":       "whoever-the-caller-says",
+			"messages":   []map[string]string{{"role": "user", "content": "Say hello."}},
+		})
+		require.NoError(t, err)
+		resp, err := domain.HandleHTTP(ctx, &protocol.HTTPRequest{
+			Method: http.MethodPost,
+			Path:   "/v1/chat/completions",
+			Headers: []*protocol.HTTPHeader{
+				{Name: "Content-Type", Values: []string{"application/json"}},
+				{Name: "X-Qntx-Asker-Did", Values: []string{asker}},
+			},
+			Body: body,
+		})
+		require.NoError(t, err)
+		return resp
+	}
+
+	const caller, runaway = "did:key:z6Mke2eCaller", "did:key:z6Mke2eRunaway"
+
+	t.Run("who the node admitted is otari's end user", func(t *testing.T) {
+		resp := ask(t, caller)
+		require.Equal(t, int32(http.StatusOK), resp.StatusCode, string(resp.Body))
+		var answer struct {
+			Choices []json.RawMessage `json:"choices"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Body, &answer))
+		assert.NotEmpty(t, answer.Choices)
+		requestID := headerOf(resp, "Otari-Request-ID")
+		require.NotEmpty(t, requestID)
+		assert.Equal(t, upstream, headerOf(resp, "Otari-Provider"))
+
+		status, said := asService(t, http.MethodGet, "/api/v1/end-users/"+url.PathEscape(caller), "")
+		assert.Equal(t, http.StatusOK, status, "otari has the asker as an end user: %s", said)
+		t.Logf("otari's end user for %s: %s", caller, said)
+		status, _ = asService(t, http.MethodGet, "/api/v1/end-users/whoever-the-caller-says", "")
+		assert.Equal(t, http.StatusNotFound, status, "the caller's own `user` named nobody")
+	})
+
+	t.Run("an end user out of budget is refused, and another is still served", func(t *testing.T) {
+		status, said := asService(t, http.MethodPut, "/api/v1/end-users?external_id="+url.QueryEscape(runaway), `{"budget_id":"`+spent+`"}`)
+		require.Contains(t, []int{http.StatusOK, http.StatusCreated}, status, said)
+
+		refused := ask(t, runaway)
+		assert.Equal(t, int32(http.StatusForbidden), refused.StatusCode, string(refused.Body))
+		assert.Equal(t, "budget_exceeded", headerOf(refused, "Otari-Error-Code"))
+		assert.Equal(t, "user", headerOf(refused, "Otari-Budget-Scope"))
+		t.Logf("otari refused %s: %s", runaway, string(refused.Body))
+
+		served := ask(t, caller)
+		assert.Equal(t, int32(http.StatusOK), served.StatusCode, string(served.Body))
 	})
 }

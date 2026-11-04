@@ -31,7 +31,7 @@ import (
 const Name = "otari"
 
 // Version is the plugin's version.
-var Version = "0.1.0"
+var Version = "0.2.0"
 
 // Configuration keys (am.toml [otari], or PUT /api/plugins/otari/config).
 const (
@@ -113,8 +113,11 @@ func clientFrom(url, keyFile string, timeoutSeconds int) (*otari.Client, error) 
 	return otari.New(url, apiKey, timeout), nil
 }
 
-// RegisterHTTP registers nothing: the plugin is reached through LLMService.
-func (p *Plugin) RegisterHTTP(mux *http.ServeMux) error { return nil }
+// RegisterHTTP registers the gateway (gateway.go), beside LLMService.
+func (p *Plugin) RegisterHTTP(mux *http.ServeMux) error {
+	mux.HandleFunc(GatewayPath, p.gateway)
+	return nil
+}
 
 // Health is whether otari answers its health route.
 func (p *Plugin) Health(ctx context.Context) plugin.HealthStatus {

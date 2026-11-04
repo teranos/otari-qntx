@@ -338,6 +338,25 @@ func (c *Client) Stream(ctx context.Context, req Request, onDelta func(Delta) er
 	return &served, nil
 }
 
+// PassOn posts body to otari's chat completions as it is, with this client's
+// key, and returns otari's answer unread: its status, headers and body are the
+// caller's to hand back, whatever the status. The caller closes the body.
+func (c *Client) PassOn(ctx context.Context, body []byte) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+ChatPath, bytes.NewReader(body))
+	if err != nil {
+		return nil, errors.Wrapf(err, "building the request to %s", c.BaseURL+ChatPath)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+	resp, err := c.HTTP.Do(httpReq)
+	if err != nil {
+		return nil, errors.Wrapf(err, "calling otari at %s", c.BaseURL+ChatPath)
+	}
+	return resp, nil
+}
+
 // Health asks otari's health route.
 func (c *Client) Health(ctx context.Context) error {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+HealthPath, nil)
