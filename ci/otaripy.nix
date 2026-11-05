@@ -134,6 +134,14 @@ in
         '';
       }
 
+      # On the runner, before the image: no ELF in the tree may ask for a
+      # GLIBC version above the box's. q runs Debian 13, glibc 2.41.
+      {
+        name = "Verify the tree asks for no glibc above the box's";
+        working-directory = "otaripy";
+        run = "ci/glibc.sh release 2.41";
+      }
+
       # Runs what ships, where it ships. Importing otari's app and otaripy is
       # the part a bare --version would not prove.
       {

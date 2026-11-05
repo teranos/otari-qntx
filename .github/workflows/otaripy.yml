@@ -43,6 +43,11 @@
           "working-directory": "otaripy"
         },
         {
+          "name": "Verify the tree asks for no glibc above the box's",
+          "run": "ci/glibc.sh release 2.41",
+          "working-directory": "otaripy"
+        },
+        {
           "name": "Verify artifact runs on the target",
           "run": "rm -rf /tmp/verify && mkdir -p /tmp/verify\ntar -xzf \"${{ steps.package.outputs.artifact }}\" -C /tmp/verify\ndocker run --rm -v /tmp/verify:/plugin:ro \"$VERIFY_IMAGE\" \\\n  /plugin/qntx-otaripy-plugin --version\n\n# The interpreter as the launcher sets it up. Starting it and\n# importing are asked apart, and a failure says which, with what\n# the loader on the target makes of the binary.\ndocker run --rm -v /tmp/verify:/plugin:ro \"$VERIFY_IMAGE\" sh -c '\n  export PYTHONHOME=/plugin/python\n  export PYTHONPATH=/plugin/python/lib/python3.13:/plugin/python/lib/python3.13/site-packages\n  py=/plugin/python/bin/python3\n  ls -lL \"$py\"\n  \"$py\" -c \"import sys; print(sys.version, sys.prefix)\"\n  started=$?\n  if [ \"$started\" -ne 0 ]; then\n    echo \"the interpreter did not start, exit $started; the loader says:\" >&2\n    ldd \"$py\" >&2\n    exit 1\n  fi\n  \"$py\" -c \"import gateway.main, otaripy, httpx; print(otaripy.__file__)\"\n  imported=$?\n  if [ \"$imported\" -ne 0 ]; then\n    echo \"the interpreter started and the import failed, exit $imported\" >&2\n    exit 1\n  fi\n'\n",
           "working-directory": "otaripy"
