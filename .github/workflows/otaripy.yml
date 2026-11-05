@@ -1,0 +1,78 @@
+{
+  "env": {
+    "VERIFY_IMAGE": "debian@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd"
+  },
+  "jobs": {
+    "linux-amd64": {
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/checkout@v5"
+        },
+        {
+          "uses": "cachix/install-nix-action@v30",
+          "with": {
+            "extra_nix_config": "experimental-features = nix-command flakes\n"
+          }
+        },
+        {
+          "name": "In-process check",
+          "run": "nix build .#checks.x86_64-linux.inprocess --show-trace -L",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Build plugin",
+          "run": "nix build .#otaripy --show-trace -L",
+          "working-directory": "otaripy"
+        },
+        {
+          "id": "version",
+          "name": "Resolve version",
+          "run": "VERSION=\"$(nix eval --raw .#otaripy.version)\"\necho \"version=$VERSION\" >> \"$GITHUB_OUTPUT\"\n",
+          "working-directory": "otaripy"
+        },
+        {
+          "id": "package",
+          "name": "Package",
+          "run": "ARTIFACT=\"qntx-otaripy-plugin-${{ steps.version.outputs.version }}-linux-amd64.tar.gz\"\nPATH=\"$(nix build nixpkgs#patchelf --no-link --print-out-paths)/bin:$PATH\" \\\n  ci/package.sh result release\ntar -czf \"$ARTIFACT\" -C release qntx-otaripy-plugin qntx-otaripy-plugin.bin lib/ python/\nsha256sum \"$ARTIFACT\" > \"$ARTIFACT.sha256\"\necho \"artifact=$ARTIFACT\" >> \"$GITHUB_OUTPUT\"\n",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Verify no store paths remain",
+          "run": "BIN=release/qntx-otaripy-plugin.bin\nreadelf -l \"$BIN\" | grep 'Requesting program interpreter'\nif readelf -l \"$BIN\" | grep -q '/nix/store'; then\n  echo \"artifact still names a /nix/store interpreter\" >&2\n  exit 1\nfi\nif readelf -d \"$BIN\" | grep -q '/nix/store'; then\n  echo \"artifact still has /nix/store in its RPATH\" >&2\n  exit 1\nfi\n",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Verify artifact runs on the target",
+          "run": "rm -rf /tmp/verify && mkdir -p /tmp/verify\ntar -xzf \"${{ steps.package.outputs.artifact }}\" -C /tmp/verify\ndocker run --rm -v /tmp/verify:/plugin:ro \"$VERIFY_IMAGE\" \\\n  /plugin/qntx-otaripy-plugin --version\n\n# set -e, and the import is the last command, so its status is the\n# step's.\ndocker run --rm -v /tmp/verify:/plugin:ro \"$VERIFY_IMAGE\" sh -ec '\n  ls -l /plugin/python/bin/python3\n  PYTHONHOME=/plugin/python /plugin/python/bin/python3 -c \"import gateway.main, otaripy, httpx; print(otaripy.__file__)\"\n'\n",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Upload artifact",
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "${{ steps.package.outputs.artifact }}",
+            "path": "otaripy/${{ steps.package.outputs.artifact }}\notaripy/${{ steps.package.outputs.artifact }}.sha256\n"
+          }
+        }
+      ]
+    }
+  },
+  "name": "otaripy",
+  "on": {
+    "push": {
+      "branches": [
+        "otaripy-is-otari-inside-pyre"
+      ],
+      "paths": [
+        "otaripy/**",
+        "ci/otaripy.nix",
+        ".github/workflows/otaripy.yml"
+      ]
+    },
+    "workflow_dispatch": null
+  },
+  "permissions": {
+    "contents": "read"
+  }
+}
