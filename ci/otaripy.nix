@@ -22,7 +22,12 @@ in
 
   on = {
     push = {
-      branches = [ "otaripy-is-otari-inside-pyre" ];
+      # The branch a record's tree URL names is the branch whose successful
+      # runs the node installs from: this one, and plugin once it is merged.
+      branches = [
+        "otaripy-is-otari-inside-pyre"
+        "plugin"
+      ];
       paths = [
         "otaripy/**"
         "ci/otaripy.nix"
@@ -124,7 +129,16 @@ in
           # 255 and says nothing where /nix is absent (run 41956638205).
           failed=0
           for exe in release/python/bin/*; do
-            [ -f "$exe" ] && head -c 4 "$exe" | grep -q ELF || continue
+            [ -f "$exe" ] || continue
+            # A script naming a store path, in its #! or anywhere: package.sh
+            # removes the venv's entry points, so none is left to.
+            if ! head -c 4 "$exe" | grep -q ELF; then
+              if grep -q '/nix/store' "$exe"; then
+                echo "$exe is a script naming /nix/store: $(head -n 1 "$exe")" >&2
+                failed=1
+              fi
+              continue
+            fi
             echo "== $exe"
             readelf -l "$exe" | grep 'Requesting program interpreter' || true
             readelf -d "$exe" | grep -E 'RPATH|RUNPATH' || true

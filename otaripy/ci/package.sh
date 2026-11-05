@@ -87,6 +87,12 @@ find "$STDLIB/site-packages" -name tests -type d -prune -exec rm -rf {} +
 rm -rf "$STDLIB"/test "$STDLIB"/idlelib "$STDLIB"/tkinter "$STDLIB"/turtledemo \
     "$STDLIB"/ensurepip "$STDLIB"/pydoc_data "$STDLIB"/config-3.13-*
 rm -rf "$OUT/python/include" "$OUT/python/share"
+# bin/ holds the interpreter and the venv's entry-point scripts (otari,
+# alembic, any-search, ...), whose #! names a store path. The plugin runs none
+# of them; the interpreter stays.
+for exe in "$OUT"/python/bin/*; do
+    head -c 4 "$exe" | grep -q ELF || rm -f "$exe"
+done
 find "$OUT/python" \( -name '*.a' -o -name '*.h' \) -type f -delete
 # Debug sections and the static symbol table of every shared library, before
 # anything is patched: no loader reads them, and the dynamic symbols a

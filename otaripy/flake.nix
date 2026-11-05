@@ -3,9 +3,12 @@
 
   inputs = {
     # The release whose C library is no newer than the box's: q runs Debian 13
-    # with glibc 2.41, and the tree carries none of its own, so every ELF in
-    # it is built against 2.40 here. nixos-unstable's 2.44 does not load
-    # there (ci/glibc.sh says which file asks for what).
+    # with glibc 2.41, and the tree carries none of its own, so what this
+    # nixpkgs builds (the interpreter, pyre, the libraries they link) is built
+    # against its glibc 2.40. nixos-unstable's 2.44 does not load there. The
+    # wheels otari's lock names are built elsewhere and copied as they are;
+    # ci/glibc.sh reads every ELF in the tree, those included, against the
+    # box's version.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     flake-utils.url = "github:numtide/flake-utils";
     # pyre with @llm, @route and plugin_config (teranos/pyre#6).

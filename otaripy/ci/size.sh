@@ -22,7 +22,7 @@ size=$(wc -c < "$ARCHIVE" | tr -d ' ')
 echo "archive: $size bytes, bound $MAX"
 echo "tree, largest parts:"
 du -sk "$TREE"/* "$TREE"/python/* "$TREE"/python/lib/python3.13/site-packages/* 2>/dev/null \
-    | sort -rn | head -n 20 | awk '{printf "  %8.1f MB  %s\n", $1 / 1024, $2}'
+    | sort -rn | awk 'NR <= 20 {printf "  %8.1f MB  %s\n", $1 / 1024, $2}'
 if [ "$size" -gt "$MAX" ]; then
     echo "the archive is $size bytes, over the $MAX the node takes" >&2
     exit 1

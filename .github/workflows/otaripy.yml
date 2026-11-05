@@ -44,7 +44,7 @@
         },
         {
           "name": "Verify no store paths remain",
-          "run": "BIN=release/qntx-otaripy-plugin.bin\nreadelf -l \"$BIN\" | grep 'Requesting program interpreter'\nif readelf -l \"$BIN\" | grep -q '/nix/store'; then\n  echo \"artifact still names a /nix/store interpreter\" >&2\n  exit 1\nfi\nif readelf -d \"$BIN\" | grep -q '/nix/store'; then\n  echo \"artifact still has /nix/store in its RPATH\" >&2\n  exit 1\nfi\n\n# The interpreters the tree carries, the same way, and the programs\n# each names by a store path: a launcher that execs one dies with\n# 255 and says nothing where /nix is absent (run 41956638205).\nfailed=0\nfor exe in release/python/bin/*; do\n  [ -f \"$exe\" ] && head -c 4 \"$exe\" | grep -q ELF || continue\n  echo \"== $exe\"\n  readelf -l \"$exe\" | grep 'Requesting program interpreter' || true\n  readelf -d \"$exe\" | grep -E 'RPATH|RUNPATH' || true\n  if readelf -l \"$exe\" | grep -q '/nix/store' || readelf -d \"$exe\" | grep -q '/nix/store'; then\n    echo \"$exe still names /nix/store as its interpreter or library path\" >&2\n    failed=1\n  fi\n  named=$(grep -a -o '/nix/store/[a-z0-9]\\{32\\}-[^/[:space:][:cntrl:]]*/bin/[A-Za-z0-9._-]*' \"$exe\" | sort -u || true)\n  if [ -n \"$named\" ]; then\n    echo \"$exe names programs by store path, which it may exec:\" >&2\n    echo \"$named\" >&2\n    failed=1\n  fi\ndone\nexit $failed\n",
+          "run": "BIN=release/qntx-otaripy-plugin.bin\nreadelf -l \"$BIN\" | grep 'Requesting program interpreter'\nif readelf -l \"$BIN\" | grep -q '/nix/store'; then\n  echo \"artifact still names a /nix/store interpreter\" >&2\n  exit 1\nfi\nif readelf -d \"$BIN\" | grep -q '/nix/store'; then\n  echo \"artifact still has /nix/store in its RPATH\" >&2\n  exit 1\nfi\n\n# The interpreters the tree carries, the same way, and the programs\n# each names by a store path: a launcher that execs one dies with\n# 255 and says nothing where /nix is absent (run 41956638205).\nfailed=0\nfor exe in release/python/bin/*; do\n  [ -f \"$exe\" ] || continue\n  # A script naming a store path, in its #! or anywhere: package.sh\n  # removes the venv's entry points, so none is left to.\n  if ! head -c 4 \"$exe\" | grep -q ELF; then\n    if grep -q '/nix/store' \"$exe\"; then\n      echo \"$exe is a script naming /nix/store: $(head -n 1 \"$exe\")\" >&2\n      failed=1\n    fi\n    continue\n  fi\n  echo \"== $exe\"\n  readelf -l \"$exe\" | grep 'Requesting program interpreter' || true\n  readelf -d \"$exe\" | grep -E 'RPATH|RUNPATH' || true\n  if readelf -l \"$exe\" | grep -q '/nix/store' || readelf -d \"$exe\" | grep -q '/nix/store'; then\n    echo \"$exe still names /nix/store as its interpreter or library path\" >&2\n    failed=1\n  fi\n  named=$(grep -a -o '/nix/store/[a-z0-9]\\{32\\}-[^/[:space:][:cntrl:]]*/bin/[A-Za-z0-9._-]*' \"$exe\" | sort -u || true)\n  if [ -n \"$named\" ]; then\n    echo \"$exe names programs by store path, which it may exec:\" >&2\n    echo \"$named\" >&2\n    failed=1\n  fi\ndone\nexit $failed\n",
           "working-directory": "otaripy"
         },
         {
@@ -72,7 +72,8 @@
   "on": {
     "push": {
       "branches": [
-        "otaripy-is-otari-inside-pyre"
+        "otaripy-is-otari-inside-pyre",
+        "plugin"
       ],
       "paths": [
         "otaripy/**",

@@ -26,8 +26,13 @@ while IFS= read -r -d '' file; do
     head -c 4 "$file" | grep -q 'ELF' || continue
     checked=$((checked + 1))
     # The versions it needs: the GLIBC_ entries of its version-needs section.
-    asked=$("$READELF" -V --wide "$file" 2>/dev/null \
-        | sed -n 's/.*Name: GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -uV | tail -n 1)
+    if ! versions=$("$READELF" -V --wide "$file" 2>&1); then
+        echo "${file#"$TREE"/} could not be read: $versions" >&2
+        too_new=$((too_new + 1))
+        continue
+    fi
+    asked=$(printf '%s\n' "$versions" \
+        | sed -n 's/.*Name: GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -uV | awk 'END {print}')
     [ -n "$asked" ] || continue
     if above "$asked" "$TARGET"; then
         echo "${file#"$TREE"/} asks for GLIBC_$asked, above the target's $TARGET" >&2
@@ -35,5 +40,5 @@ while IFS= read -r -d '' file; do
     fi
 done < <(find "$TREE" -type f -print0)
 
-echo "glibc: $checked ELF files read, $too_new asking for more than GLIBC_$TARGET"
+echo "glibc: $checked ELF files read, $too_new unreadable or asking for more than GLIBC_$TARGET"
 [ "$too_new" -eq 0 ]
