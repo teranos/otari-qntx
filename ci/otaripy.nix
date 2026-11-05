@@ -94,6 +94,15 @@ in
         '';
       }
 
+      # The node takes the artifact in 30 s and whole in memory: bounded at
+      # 150,000,000 bytes, capy's size class (its 0.246.0 archive is
+      # 116,462,153). ci/size.sh says why that number.
+      {
+        name = "Verify the archive is one the node can take";
+        working-directory = "otaripy";
+        run = ''ci/size.sh "${artifact}" release 150000000'';
+      }
+
       # A store path here means package.sh did not run or did not take.
       {
         name = "Verify no store paths remain";
@@ -174,6 +183,18 @@ in
               echo "the interpreter started and the import failed, exit $imported" >&2
               exit 1
             fi
+          '
+
+          # What was cut from the tree is not what otaripy runs on: the
+          # in-process check, on the packaged tree, on the target. otari
+          # starts, Chat is served, the gateway names its end user, the usage
+          # record is read.
+          CHECK="$(nix build .#inprocess-files --no-link --print-out-paths)"
+          docker run --rm -v /tmp/verify:/plugin:ro -v "$CHECK":/check:ro "$VERIFY_IMAGE" sh -ec '
+            export PYTHONHOME=/plugin/python
+            export PYTHONPATH=/plugin/python/lib/python3.13:/plugin/python/lib/python3.13/site-packages
+            mkdir -p /tmp/scratch
+            /plugin/python/bin/python3 /check/inprocess.py /check/mock_openai.py /tmp/scratch
           '
         '';
       }

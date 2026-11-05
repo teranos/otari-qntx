@@ -169,6 +169,13 @@
           default = otaripy;
           inherit otaripy;
           python = pythonEnv;
+          # The in-process check and its stand-in upstream, for the workflow
+          # to run against the packaged tree on the target image.
+          inprocess-files = pkgs.runCommand "otaripy-inprocess-files" { } ''
+            mkdir -p $out
+            cp ${./tests/inprocess.py} $out/inprocess.py
+            cp ${otariSrc}/nix/tests/mock_openai.py $out/mock_openai.py
+          '';
         };
 
         # The interpreter the release tree carries is python313's own, not the

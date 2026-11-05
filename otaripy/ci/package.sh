@@ -39,10 +39,15 @@ copy_store_libs() {
     while read -r soname arrow path _; do
         [ "$arrow" = "=>" ] || continue
         case "$path" in /nix/store/*) ;; *) continue ;; esac
+        # A library a wheel bundles (numpy.libs/, pillow.libs/) is in the
+        # tree already, beside the extension that loads it by its own
+        # $ORIGIN, which the patch below keeps.
+        case "$path" in */site-packages/*) continue ;; esac
         is_system_library "$soname" && continue
         [ -f "$OUT/lib/$soname" ] && continue
         cp -L "$path" "$OUT/lib/$soname"
         chmod 0644 "$OUT/lib/$soname"
+        strip --strip-unneeded "$OUT/lib/$soname"
         copied=$((copied + 1))
     done < <(ldd "$target" 2>/dev/null || true)
     echo "$copied"
@@ -65,13 +70,45 @@ mkdir -p "$OUT/python"
 cp -RL "$PYENV"/. "$OUT/python/"
 chmod -R u+w "$OUT/python"
 
+# What the plugin never loads, out of the tree before anything is patched:
+# compiled bytecode (Python compiles a module again when it imports it), the
+# test suites of the standard library and of every package, the standard
+# library's GUI, demos, pip bootstrap and help text, the static libpython and
+# its build config, C headers and static libraries, and man pages. Each is
+# measured in the commit that cut it.
+du -sk "$OUT/python" | awk '{printf "python tree before pruning: %.1f MB\n", $1 / 1024}'
+# lib64 is python313's link to lib, and cp -RL copied lib through it a second
+# time, whole. Python reads lib.
+rm -rf "$OUT/python/lib64"
+STDLIB="$OUT/python/lib/python3.13"
+find "$OUT/python" -name __pycache__ -type d -prune -exec rm -rf {} +
+find "$OUT/python" -name '*.pyc' -type f -delete
+find "$STDLIB/site-packages" -name tests -type d -prune -exec rm -rf {} +
+rm -rf "$STDLIB"/test "$STDLIB"/idlelib "$STDLIB"/tkinter "$STDLIB"/turtledemo \
+    "$STDLIB"/ensurepip "$STDLIB"/pydoc_data "$STDLIB"/config-3.13-*
+rm -rf "$OUT/python/include" "$OUT/python/share"
+find "$OUT/python" \( -name '*.a' -o -name '*.h' \) -type f -delete
+# Debug sections and the static symbol table of every shared library, before
+# anything is patched: no loader reads them, and the dynamic symbols a
+# library links by stay. Run 41961599788's tree carried 82.7 MB of the one and
+# 16.2 MB of the other. Libraries copied into lib/ are stripped as they come.
+find "$OUT/python" -type f -name '*.so*' -exec sh -c '
+    for f; do
+        head -c 4 "$f" | grep -q ELF || continue
+        strip --strip-unneeded "$f"
+    done' strip-elf {} +
+du -sk "$OUT/python" | awk '{printf "python tree after pruning: %.1f MB\n", $1 / 1024}'
+
 # Compiled extensions carry store paths exactly as the top-level libraries do,
 # and DT_RUNPATH does not cover a library's own dependencies, so each gets its
 # own $ORIGIN rather than inheriting the executable's.
 ext=0
 while IFS= read -r so; do
     copy_store_libs "$so" > /dev/null
-    patchelf --set-rpath '$ORIGIN:$ORIGIN/../../../../lib' "$so"
+    # Its own $ORIGIN entries (a wheel's $ORIGIN/../numpy.libs) are kept
+    # ahead of the tree's lib/; its store paths go.
+    own=$(patchelf --print-rpath "$so" | tr ':' '\n' | grep '^\$ORIGIN' | paste -sd: - || true)
+    patchelf --set-rpath "${own:+$own:}"'$ORIGIN:$ORIGIN/../../../../lib' "$so"
     ext=$((ext + 1))
 done < <(find "$OUT/python" -name '*.so' -type f)
 if [ "$ext" -eq 0 ]; then
@@ -112,6 +149,7 @@ echo "python: patched $bins executables"
 for lib in "$OUT"/lib/*; do
     patchelf --set-rpath '$ORIGIN' "$lib"
 done
+du -sk "$OUT" | awk '{printf "tree: %.1f MB\n", $1 / 1024}'
 
 patchelf \
     --set-interpreter "$INTERP" \
