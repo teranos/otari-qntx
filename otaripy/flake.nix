@@ -94,13 +94,19 @@
         # dependencies and otaripy's module, as capy's withPackages is one.
         # otari's venv holds only site-packages, and the release tree runs on
         # PYTHONHOME, which needs the standard library beside them.
+        # python313 first, so where both hold a file (bin/python3 among
+        # them) the interpreter's own is the one joined; and the venv's
+        # pyvenv.cfg left out. Both name python313 by its store path.
         pythonEnv = pkgs.symlinkJoin {
           name = "otaripy-env";
           paths = [
+            pkgs.python313
             otariSet.otari-venv
             otaripyModule
-            pkgs.python313
           ];
+          postBuild = ''
+            rm $out/pyvenv.cfg
+          '';
         };
 
         outputHashes = {
@@ -160,6 +166,23 @@
           inherit otaripy;
           python = pythonEnv;
         };
+
+        # The interpreter the release tree carries is python313's own, not the
+        # venv's launcher: that launcher execs python313 by its store path,
+        # which a box without /nix lacks, and it dies with 255 and no word
+        # (run 41956638205, the step that runs the artifact on Debian). And
+        # no pyvenv.cfg, whose home names that store path too.
+        checks.interpreter = pkgs.runCommand "otaripy-interpreter" { } ''
+          ran=$(readlink -f ${pythonEnv}/bin/python3)
+          own=$(readlink -f ${pkgs.python313}/bin/python3)
+          echo "bin/python3 is $ran; python313's is $own"
+          [ "$ran" = "$own" ]
+          if [ -e ${pythonEnv}/pyvenv.cfg ]; then
+            echo "the env carries pyvenv.cfg: $(cat ${pythonEnv}/pyvenv.cfg)"
+            exit 1
+          fi
+          PYTHONPATH=${pythonEnv}/${pkgs.python313.sitePackages} ${pythonEnv}/bin/python3 -c 'import gateway.main, otaripy' > $out
+        '';
 
         # otaripy's module against otari in its own process and a stand-in
         # upstream on loopback, in the sandbox: Chat with what served it, the

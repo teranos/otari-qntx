@@ -109,6 +109,28 @@ in
             echo "artifact still has /nix/store in its RPATH" >&2
             exit 1
           fi
+
+          # The interpreters the tree carries, the same way, and the programs
+          # each names by a store path: a launcher that execs one dies with
+          # 255 and says nothing where /nix is absent (run 41956638205).
+          failed=0
+          for exe in release/python/bin/*; do
+            [ -f "$exe" ] && head -c 4 "$exe" | grep -q ELF || continue
+            echo "== $exe"
+            readelf -l "$exe" | grep 'Requesting program interpreter' || true
+            readelf -d "$exe" | grep -E 'RPATH|RUNPATH' || true
+            if readelf -l "$exe" | grep -q '/nix/store' || readelf -d "$exe" | grep -q '/nix/store'; then
+              echo "$exe still names /nix/store as its interpreter or library path" >&2
+              failed=1
+            fi
+            named=$(grep -a -o '/nix/store/[a-z0-9]\{32\}-[^/[:space:][:cntrl:]]*/bin/[A-Za-z0-9._-]*' "$exe" | sort -u || true)
+            if [ -n "$named" ]; then
+              echo "$exe names programs by store path, which it may exec:" >&2
+              echo "$named" >&2
+              failed=1
+            fi
+          done
+          exit $failed
         '';
       }
 
@@ -123,11 +145,27 @@ in
           docker run --rm -v /tmp/verify:/plugin:ro "$VERIFY_IMAGE" \
             /plugin/qntx-otaripy-plugin --version
 
-          # set -e, and the import is the last command, so its status is the
-          # step's.
-          docker run --rm -v /tmp/verify:/plugin:ro "$VERIFY_IMAGE" sh -ec '
-            ls -l /plugin/python/bin/python3
-            PYTHONHOME=/plugin/python /plugin/python/bin/python3 -c "import gateway.main, otaripy, httpx; print(otaripy.__file__)"
+          # The interpreter as the launcher sets it up. Starting it and
+          # importing are asked apart, and a failure says which, with what
+          # the loader on the target makes of the binary.
+          docker run --rm -v /tmp/verify:/plugin:ro "$VERIFY_IMAGE" sh -c '
+            export PYTHONHOME=/plugin/python
+            export PYTHONPATH=/plugin/python/lib/python3.13:/plugin/python/lib/python3.13/site-packages
+            py=/plugin/python/bin/python3
+            ls -lL "$py"
+            "$py" -c "import sys; print(sys.version, sys.prefix)"
+            started=$?
+            if [ "$started" -ne 0 ]; then
+              echo "the interpreter did not start, exit $started; the loader says:" >&2
+              ldd "$py" >&2
+              exit 1
+            fi
+            "$py" -c "import gateway.main, otaripy, httpx; print(otaripy.__file__)"
+            imported=$?
+            if [ "$imported" -ne 0 ]; then
+              echo "the interpreter started and the import failed, exit $imported" >&2
+              exit 1
+            fi
           '
         '';
       }
