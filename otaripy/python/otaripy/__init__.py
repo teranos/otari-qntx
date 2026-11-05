@@ -10,6 +10,7 @@ serves the handlers that wait on it").
 """
 
 import asyncio
+import concurrent.futures
 import json
 import os
 import secrets
@@ -41,10 +42,17 @@ class _Otari:
         self.timeout = timeout
 
     def ask(self, method, path, key, body=None, headers=None):
+        """otari's answer, or TimeoutError once timeout_seconds pass; the call
+        is then cancelled at otari, so it stops spending upstream."""
         sent = {"Authorization": "Bearer " + key}
         sent.update(headers or {})
         coro = self.client.request(method, path, content=body, headers=sent)
-        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(self.timeout)
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        try:
+            return future.result(self.timeout)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise TimeoutError("otari did not answer within %s s" % self.timeout) from None
 
 
 def _kept(path, make):
@@ -234,8 +242,11 @@ def chat(request, config):
         body["max_tokens"] = request["max_tokens"]
 
     o = otari(config)
-    response = o.ask("POST", CHAT, o.service_key, json.dumps(body).encode(),
-                     {"Content-Type": "application/json"})
+    try:
+        response = o.ask("POST", CHAT, o.service_key, json.dumps(body).encode(),
+                         {"Content-Type": "application/json"})
+    except TimeoutError as e:
+        return {"error": {"code": "DEADLINE_EXCEEDED", "message": str(e)}}
     if response.status_code >= 400:
         return _refusal(response)
 
@@ -278,24 +289,39 @@ def _refuse(status, message):
             "body": json.dumps({"error": {"message": message}})}
 
 
+# The end user every caller the node names no asker for is billed as: one
+# identity, one per-asker budget, so a caller cannot name a fresh user per
+# request and be given a fresh budget each time.
+UNATTRIBUTED = "qntx-unattributed"
+
+
+def _as_asker(body, headers):
+    """body with its user set to who the node admitted: the asking token's DID,
+    else the user, else UNATTRIBUTED. Whatever the caller put there goes."""
+    asker = (headers.get("x-qntx-asker-did") or "").strip() or (headers.get("x-qntx-asker-user") or "").strip()
+    try:
+        asked = json.loads(body)
+    except ValueError as e:
+        raise ValueError("the body is not a JSON object: %s" % e) from None
+    if not isinstance(asked, dict):
+        raise ValueError("the body is not a JSON object")
+    asked["user"] = asker or UNATTRIBUTED
+    return json.dumps(asked).encode()
+
+
 def completions(request, config):
     """OpenAI's chat completions, passed to otari with otaripy's key and never
     the caller's credential; who the node admitted is the body's user."""
-    body = request["body"]
-    headers = request["headers"]
-    asker = (headers.get("x-qntx-asker-did") or "").strip() or (headers.get("x-qntx-asker-user") or "").strip()
-    if asker:
-        try:
-            asked = json.loads(body)
-        except ValueError as e:
-            return _refuse(400, "the body is not a JSON object: %s" % e)
-        if not isinstance(asked, dict):
-            return _refuse(400, "the body is not a JSON object")
-        asked["user"] = asker
-        body = json.dumps(asked).encode()
+    try:
+        body = _as_asker(request["body"], request["headers"])
+    except ValueError as e:
+        return _refuse(400, str(e))
 
     o = otari(config)
-    response = o.ask("POST", CHAT, o.service_key, body, {"Content-Type": "application/json"})
+    try:
+        response = o.ask("POST", CHAT, o.service_key, body, {"Content-Type": "application/json"})
+    except TimeoutError as e:
+        return _refuse(504, str(e))
     back = {name: value for name, value in response.headers.items()
             if name.lower() in PASSED_BACK or name.lower().startswith("otari-")}
     return {"status": response.status_code, "headers": back, "body": response.content}
@@ -308,7 +334,10 @@ def usage(request, config):
     if not request_id or "/" in request_id:
         return _refuse(400, "name the call as ?request_id=<Otari-Request-ID>")
     o = otari(config)
-    response = o.ask("GET", USAGE + request_id, o.master_key)
+    try:
+        response = o.ask("GET", USAGE + request_id, o.master_key)
+    except TimeoutError as e:
+        return _refuse(504, str(e))
     return {"status": response.status_code,
             "headers": {"Content-Type": response.headers.get("content-type", "application/json")},
             "body": response.content}

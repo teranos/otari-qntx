@@ -58,6 +58,37 @@ config = {
 }
 
 try:
+    # The budget identity is always the node's word, never the caller's: an
+    # asker the node names, else one identity every unnamed caller shares,
+    # so naming a fresh user does not buy a fresh daily budget.
+    named = json.loads(otaripy._as_asker(b'{"user": "me-again"}', {"x-qntx-asker-did": "did:key:z6Mk"}))
+    assert named["user"] == "did:key:z6Mk", named
+    unnamed = json.loads(otaripy._as_asker(b'{"user": "fresh-every-time"}', {}))
+    assert unnamed["user"] == otaripy.UNATTRIBUTED, unnamed
+
+    # A call whose wait runs out is cancelled at otari, not left spending.
+    import asyncio, threading
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    seen = {}
+
+    class Slow:
+        async def request(self, *args, **kwargs):
+            try:
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                seen["cancelled"] = True
+                raise
+
+    try:
+        otaripy._Otari(loop, Slow(), "tk-x", "m", 0.2).ask("POST", "/x", "tk-x")
+        raise AssertionError("a call past its timeout returned")
+    except TimeoutError:
+        pass
+    time.sleep(0.2)
+    assert seen.get("cancelled"), "the timed-out call was left running at otari"
+    loop.call_soon_threadsafe(loop.stop)
+
     # The node's Chat, as the @llm function answers it.
     answer = otaripy.chat(
         {"model": "mock:good-model", "provider": "otaripy",
