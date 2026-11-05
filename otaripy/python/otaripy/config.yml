@@ -1,0 +1,37 @@
+# otari's config inside otaripy. otaripy sets each ${...} in the plugin's
+# environment before otari reads this: OPENROUTER_API_KEY from the plugin's
+# config (openrouter_api_key, which the node resolves from SSM), and
+# OTARI_QNTX_KEY from the service key otaripy keeps in its data directory.
+
+providers:
+  openrouter:
+    api_key: ${OPENROUTER_API_KEY}
+
+# Prices from the models.dev snapshot otari bundles, which prices OpenRouter's
+# models (openai/gpt-4o-mini at 0.15 / 0.60 USD per million in and out in the
+# snapshot of 2026-11-02). A model it does not price is refused, not run free.
+default_pricing: true
+require_pricing: true
+
+# The key below is declared, so otari mints and prints none of its own.
+bootstrap_api_key: false
+
+# The owner's amounts, in USD, otari's unit. qntx-ceiling, for everything
+# through the node:
+# "like, 30 per month"
+# per-asker, for each asking token:
+# "1 per day"
+budgets:
+  per-asker: {max_budget: 1, reset_alignment: calendar_day}
+  qntx-ceiling: {max_budget: 30, reset_alignment: calendar_month}
+
+# The key otaripy calls otari with. A service key: who the node admitted is
+# the request's user, an end user billed apart, held to per-asker, and every
+# end user together held to qntx-ceiling.
+api_keys:
+  qntx:
+    secret: ${OTARI_QNTX_KEY}
+    user_id: qntx
+    is_service_key: true
+    end_user_budget_id: per-asker
+    ceiling: qntx-ceiling

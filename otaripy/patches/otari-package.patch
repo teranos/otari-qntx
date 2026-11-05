@@ -1,0 +1,390 @@
+From the otari change on branch nix-flake (08559aca, 70f85c70): the migrations
+fix and nix/package.nix, which the e2e check builds otari with, and the
+stand-in upstream it runs against.
+
+diff --git a/nix/package.nix b/nix/package.nix
+new file mode 100644
+index 00000000..0b190991
+--- /dev/null
++++ b/nix/package.nix
+@@ -0,0 +1,189 @@
++# otari's Python workspace, built from uv.lock with uv2nix.
++#
++# Every Python distribution comes from the lock, by the hash uv recorded for
++# it: the four workspace members (gateway, otari-agent, any-search, any-fetch)
++# are built from this tree, everything else from its locked wheel, or its
++# locked sdist where the lock has no wheel (ibm-cos-sdk*).
++{
++  lib,
++  pyproject-nix,
++  uv2nix,
++  pyproject-build-systems,
++  src,
++  version,
++}:
++let
++  # Only what the Python build and the migrations read: web/, docs/, tests/
++  # and the rest stay out of the store path the members are built from, so
++  # editing them does not rebuild the gateway. That is for a path (this
++  # flake's own tree); a store path built elsewhere (a patched source) is
++  # taken whole.
++  workspaceRoot =
++    if !lib.isPath src then
++      src
++    else
++      lib.fileset.toSource {
++        root = src;
++        fileset = lib.fileset.unions [
++          (src + "/pyproject.toml")
++          (src + "/uv.lock")
++          (src + "/LICENSE")
++          (src + "/src")
++          (src + "/cli")
++          (src + "/any-search")
++          (src + "/any-fetch")
++          (src + "/alembic")
++          (src + "/alembic.ini")
++        ];
++      };
++
++  workspace = uv2nix.lib.workspace.loadWorkspace { inherit workspaceRoot; };
++
++  # Wheels where the lock has them: the same artifacts `uv sync --frozen`
++  # installs in the Docker image.
++  overlay = workspace.mkPyprojectOverlay { sourcePreference = "wheel"; };
++
++  # The editable install points at the checkout, so it is loaded from the
++  # unfiltered tree (the editable overlay needs a path, not a filtered source).
++  devWorkspace =
++    if lib.isPath src then uv2nix.lib.workspace.loadWorkspace { workspaceRoot = src; } else workspace;
++
++  editableOverlay = devWorkspace.mkEditablePyprojectOverlay {
++    root = "$REPO_ROOT";
++    members = [
++      "gateway"
++      "otari-agent"
++      "any-search"
++      "any-fetch"
++    ];
++  };
++
++  # The extras the Docker image installs, less e2b (a hosted sandbox SDK
++  # selected only by `sandbox_provider: e2b`): Prometheus metrics, the shared
++  # Redis rate-limit store and the MaxMind country lookup. Each is imported only
++  # when its setting turns it on.
++  runtimeDeps = workspace.deps.default // {
++    gateway = [
++      "metrics"
++      "redis"
++      "geoip"
++    ];
++  };
++
++  forPkgs =
++    {
++      pkgs,
++      # requires-python is >=3.13 and the lock resolves below 3.15.
++      python ? pkgs.python313,
++    }:
++    let
++
++      overrides = final: prev: {
++        # setuptools-scm reads the version from Git tags, and a Nix build has
++        # no .git; each member names fallback_version 0.0.0 for exactly this,
++        # and pinning it here makes that explicit rather than accidental.
++        otari-agent = prev.otari-agent.overrideAttrs (old: {
++          env = (old.env or { }) // {
++            SETUPTOOLS_SCM_PRETEND_VERSION = "0.0.0";
++          };
++        });
++        any-search = prev.any-search.overrideAttrs (old: {
++          env = (old.env or { }) // {
++            SETUPTOOLS_SCM_PRETEND_VERSION = "0.0.0";
++          };
++        });
++        any-fetch = prev.any-fetch.overrideAttrs (old: {
++          env = (old.env or { }) // {
++            SETUPTOOLS_SCM_PRETEND_VERSION = "0.0.0";
++          };
++        });
++
++        # The only locked distributions without a wheel: plain setuptools
++        # sdists (IBM's COS SDK, through any-guardrail[watsonx]). uv.lock does
++        # not record build requirements, so they are named here.
++        ibm-cos-sdk = prev.ibm-cos-sdk.overrideAttrs (old: {
++          nativeBuildInputs =
++            (old.nativeBuildInputs or [ ]) ++ final.resolveBuildSystem { setuptools = [ ]; };
++        });
++        ibm-cos-sdk-core = prev.ibm-cos-sdk-core.overrideAttrs (old: {
++          nativeBuildInputs =
++            (old.nativeBuildInputs or [ ]) ++ final.resolveBuildSystem { setuptools = [ ]; };
++        });
++        ibm-cos-sdk-s3transfer = prev.ibm-cos-sdk-s3transfer.overrideAttrs (old: {
++          nativeBuildInputs =
++            (old.nativeBuildInputs or [ ]) ++ final.resolveBuildSystem { setuptools = [ ]; };
++        });
++      };
++
++      pythonSet = (pkgs.callPackage pyproject-nix.build.packages { inherit python; }).overrideScope (
++        lib.composeManyExtensions [
++          pyproject-build-systems.overlays.wheel
++          overlay
++          overrides
++        ]
++      );
++
++      otari-venv = pythonSet.mkVirtualEnv "otari-env-${version}" runtimeDeps;
++
++      otari-dev-venv = (pythonSet.overrideScope editableOverlay).mkVirtualEnv "otari-dev-env" devWorkspace.deps.all;
++
++      # The Alembic chain lives beside src/, not in the gateway wheel. It is
++      # installed here and the gateway is told where by OTARI_MIGRATIONS_DIR.
++      otari-migrations = pkgs.runCommand "otari-migrations-${version}" { } ''
++        mkdir -p $out/share/otari
++        cp -r ${workspaceRoot}/alembic $out/share/otari/alembic
++        cp ${workspaceRoot}/alembic.ini $out/share/otari/alembic.ini
++      '';
++
++      otari =
++        pkgs.runCommand "otari-${version}"
++          {
++            nativeBuildInputs = [ pkgs.makeWrapper ];
++            passthru = {
++              inherit
++                otari-venv
++                otari-dev-venv
++                otari-migrations
++                pythonSet
++                python
++                ;
++            };
++            meta = {
++              description = "otari, an OpenAI-compatible LLM gateway";
++              homepage = "https://github.com/mozilla-ai/otari";
++              license = lib.licenses.asl20;
++              mainProgram = "otari";
++              platforms = lib.platforms.linux ++ lib.platforms.darwin;
++            };
++          }
++          ''
++            mkdir -p $out/bin $out/share
++            ln -s ${otari-migrations}/share/otari $out/share/otari
++            # `otari migrate` runs the `alembic` it finds on PATH, so the
++            # wrapped one (which knows OTARI_ALEMBIC_INI) is put first there.
++            for prog in otari alembic any-search any-fetch; do
++              makeWrapper ${otari-venv}/bin/$prog $out/bin/$prog \
++                --prefix PATH : $out/bin \
++                --set-default OTARI_VERSION ${lib.escapeShellArg version} \
++                --set-default OTARI_MIGRATIONS_DIR ${otari-migrations}/share/otari/alembic \
++                --set-default OTARI_ALEMBIC_INI ${otari-migrations}/share/otari/alembic.ini
++            done
++            makeWrapper ${otari-venv}/bin/python $out/bin/otari-python \
++              --set-default OTARI_VERSION ${lib.escapeShellArg version} \
++              --set-default OTARI_MIGRATIONS_DIR ${otari-migrations}/share/otari/alembic \
++              --set-default OTARI_ALEMBIC_INI ${otari-migrations}/share/otari/alembic.ini
++          '';
++    in
++    {
++      inherit
++        pythonSet
++        otari-venv
++        otari-dev-venv
++        otari-migrations
++        otari
++        ;
++    };
++in
++{
++  inherit workspace forPkgs;
++}
+diff --git a/nix/tests/mock_openai.py b/nix/tests/mock_openai.py
+new file mode 100644
+index 00000000..4df3b562
+--- /dev/null
++++ b/nix/tests/mock_openai.py
+@@ -0,0 +1,113 @@
++"""A stand-in OpenAI-compatible upstream for otari's Nix checks.
++
++Standard library only, so the checks run in the Nix sandbox without network.
++It answers ``POST /v1/chat/completions`` (whole and streamed) and
++``GET /v1/models``. A model whose name starts with ``broken`` is answered with a
++500, which is what makes a routing policy fall over to its next candidate.
++
++The answer names a model other than the one asked for
++(``<asked>-2026-01-01``), the way real providers answer an alias with a dated
++snapshot, so a check can tell the model the gateway sent from the model the
++upstream says ran.
++"""
++
++import json
++import sys
++import time
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++
++PROMPT_TOKENS = 11
++WORDS = ["Hello", " from", " the", " mock", " upstream", "."]
++
++
++class Handler(BaseHTTPRequestHandler):
++    protocol_version = "HTTP/1.1"
++
++    def log_message(self, fmt: str, *args: object) -> None:
++        sys.stderr.write("mock-openai: " + (fmt % args) + "\n")
++
++    def _json(self, status: int, body: dict) -> None:
++        data = json.dumps(body).encode()
++        self.send_response(status)
++        self.send_header("Content-Type", "application/json")
++        self.send_header("Content-Length", str(len(data)))
++        self.end_headers()
++        self.wfile.write(data)
++
++    def do_GET(self) -> None:  # noqa: N802
++        if self.path.rstrip("/").endswith("/models"):
++            self._json(
++                200,
++                {"object": "list", "data": [{"id": "good-model", "object": "model", "owned_by": "mock"}]},
++            )
++            return
++        self._json(404, {"error": {"message": "not found"}})
++
++    def do_POST(self) -> None:  # noqa: N802
++        length = int(self.headers.get("Content-Length") or 0)
++        request = json.loads(self.rfile.read(length) or b"{}")
++        if not self.path.rstrip("/").endswith("/chat/completions"):
++            self._json(404, {"error": {"message": "not found"}})
++            return
++        asked = request.get("model", "")
++        if asked.startswith("broken"):
++            self._json(500, {"error": {"message": "mock upstream failure", "type": "server_error"}})
++            return
++        answered = f"{asked}-2026-01-01"
++        created = int(time.time())
++        completion_tokens = len(WORDS)
++        usage = {
++            "prompt_tokens": PROMPT_TOKENS,
++            "completion_tokens": completion_tokens,
++            "total_tokens": PROMPT_TOKENS + completion_tokens,
++        }
++        if not request.get("stream"):
++            self._json(
++                200,
++                {
++                    "id": "chatcmpl-mock",
++                    "object": "chat.completion",
++                    "created": created,
++                    "model": answered,
++                    "choices": [
++                        {
++                            "index": 0,
++                            "message": {"role": "assistant", "content": "".join(WORDS)},
++                            "finish_reason": "stop",
++                        }
++                    ],
++                    "usage": usage,
++                },
++            )
++            return
++        self.send_response(200)
++        self.send_header("Content-Type", "text/event-stream")
++        self.send_header("Cache-Control", "no-cache")
++        self.send_header("Connection", "close")
++        self.end_headers()
++
++        def send(chunk: dict) -> None:
++            self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
++            self.wfile.flush()
++
++        base = {"id": "chatcmpl-mock", "object": "chat.completion.chunk", "created": created, "model": answered}
++        send({**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]})
++        for word in WORDS:
++            send({**base, "choices": [{"index": 0, "delta": {"content": word}, "finish_reason": None}]})
++        send({**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
++        if (request.get("stream_options") or {}).get("include_usage"):
++            send({**base, "choices": [], "usage": usage})
++        self.wfile.write(b"data: [DONE]\n\n")
++        self.wfile.flush()
++        self.close_connection = True
++
++
++def main() -> None:
++    port = int(sys.argv[1]) if len(sys.argv) > 1 else 18080
++    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
++    sys.stderr.write(f"mock-openai: listening on 127.0.0.1:{port}\n")
++    server.serve_forever()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/gateway/cli.py b/src/gateway/cli.py
+index 5936af10..6340e91b 100644
+--- a/src/gateway/cli.py
++++ b/src/gateway/cli.py
+@@ -185,10 +185,15 @@ def migrate(config: str | None, database_url: str | None, revision: str) -> None
+ 
+     env = os.environ.copy()
+     env["OTARI_DATABASE_URL"] = gateway_config.database_url
++    # Alembic reads ./alembic.ini unless told otherwise, which only works from a
++    # source checkout. An install that ships the chain elsewhere names its ini.
++    alembic_args = [alembic_path]
++    if alembic_ini := os.environ.get("OTARI_ALEMBIC_INI"):
++        alembic_args += ["-c", alembic_ini]
+ 
+     try:
+         result = subprocess.run(  # noqa: S603 validated up a few lines
+-            [alembic_path, "upgrade", revision],
++            [*alembic_args, "upgrade", revision],
+             env=env,
+             check=True,
+             capture_output=True,
+diff --git a/src/gateway/core/database.py b/src/gateway/core/database.py
+index ce7399fd..afd6dd45 100644
+--- a/src/gateway/core/database.py
++++ b/src/gateway/core/database.py
+@@ -4,6 +4,7 @@ from __future__ import annotations
+ 
+ import asyncio
+ import contextlib
++import os
+ import time
+ from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+ from contextlib import asynccontextmanager
+@@ -89,10 +90,36 @@ def to_sync_url(database_url: str) -> str:
+     return url.set(drivername=sync_drivername).render_as_string(hide_password=False)
+ 
+ 
++# Where an installed gateway finds its Alembic chain. The chain lives beside
++# src/ in the repository, not inside the gateway package, so only a source
++# checkout has it at a path derivable from this file. An install that ships the
++# chain elsewhere (a Nix store path, a distro package) names it here.
++MIGRATIONS_DIR_ENV = "OTARI_MIGRATIONS_DIR"
++
++
++def migrations_dir() -> Path:
++    """Return the directory holding ``env.py`` and ``versions/`` of otari's Alembic chain.
++
++    ``OTARI_MIGRATIONS_DIR`` when set, otherwise the ``alembic/`` directory of
++    the source checkout this module was imported from.
++
++    Raises:
++        RuntimeError: ``OTARI_MIGRATIONS_DIR`` names a directory without an ``env.py``.
++
++    """
++    configured = os.environ.get(MIGRATIONS_DIR_ENV)
++    if configured:
++        directory = Path(configured)
++        if not (directory / "env.py").is_file():
++            msg = f"{MIGRATIONS_DIR_ENV}={configured} holds no env.py, so it is not otari's Alembic chain."
++            raise RuntimeError(msg)
++        return directory
++    return Path(__file__).resolve().parents[3] / "alembic"
++
++
+ def _run_migrations(database_url: str) -> None:
+     alembic_cfg = Config()
+-    alembic_dir = Path(__file__).resolve().parents[3] / "alembic"
+-    alembic_cfg.set_main_option("script_location", str(alembic_dir))
++    alembic_cfg.set_main_option("script_location", str(migrations_dir()))
+     # set_main_option stores the value in a configparser.ConfigParser, whose
+     # interpolation treats a lone "%" as the start of a variable reference. A
+     # URL-decoded password containing "%" (e.g. from an encoded "+") then
