@@ -100,11 +100,11 @@
     "pyre-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1793842413,
-        "narHash": "sha256-8Edy1Yib00nuveVVKRRAJFi13gqBWzrcFlkVllDzsC4=",
+        "lastModified": 1793845913,
+        "narHash": "sha256-/kq1kXxu4i40Vshxej0PTS0iDZbTAcpFlGSyN3Bl9Pg=",
         "owner": "teranos",
         "repo": "pyre",
-        "rev": "41e2294a26d129940c35ca82a5f243c3c66db875",
+        "rev": "62f3d53688236fbc0af366a6f83c770acfd86bad",
         "type": "github"
       },
       "original": {
