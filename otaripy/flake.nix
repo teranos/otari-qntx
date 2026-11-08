@@ -13,7 +13,7 @@
     flake-utils.url = "github:numtide/flake-utils";
     # pyre with @llm, @route and plugin_config (teranos/pyre#6).
     pyre-src = {
-      url = "github:teranos/pyre/e42bb1ba3f479c864fa078f64947e69ec9ec71d2";
+      url = "github:teranos/pyre/147ac90ea529918743bb82ae8725fb4ec84c3574";
       flake = false;
     };
     # The protocol pyre builds against: QNTX llm-served (#1511), the ref
@@ -65,7 +65,7 @@
 
         # The version. Compiled in, reported by the running plugin, and the
         # name the workflow's artifact is published under.
-        otaripyVersion = "0.2.0";
+        otaripyVersion = "0.2.1";
 
         otariSrc = pkgs.applyPatches {
           name = "otari-src-nix";
