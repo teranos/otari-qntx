@@ -13,13 +13,13 @@
     flake-utils.url = "github:numtide/flake-utils";
     # pyre with @llm, @route and plugin_config (teranos/pyre#6).
     pyre-src = {
-      url = "github:teranos/pyre/llm-handlers-make-pyre-a-provider";
+      url = "github:teranos/pyre/e42bb1ba3f479c864fa078f64947e69ec9ec71d2";
       flake = false;
     };
     # The protocol pyre builds against: QNTX llm-served (#1511), the ref
     # pyre's Cargo.lock names, which carries LLMServed.
     qntx-src = {
-      url = "github:teranos/QNTX/035c62ed46375dde51243efe509006e610a8a76e";
+      url = "github:teranos/QNTX/e82dfab1927de922060a182f7e5faf3b4b88614e";
       flake = false;
     };
     # otari at the commit the plugin's e2e check runs against, with
@@ -65,7 +65,7 @@
 
         # The version. Compiled in, reported by the running plugin, and the
         # name the workflow's artifact is published under.
-        otaripyVersion = "0.1.0";
+        otaripyVersion = "0.2.0";
 
         otariSrc = pkgs.applyPatches {
           name = "otari-src-nix";
@@ -117,7 +117,7 @@
         };
 
         outputHashes = {
-          "qntx-ats-0.2.44" = "sha256-xFz5NDwDLEr7t2eG1K2PFvJP17ke00NZ2VlLwh4YKgE=";
+          "qntx-ats-0.2.44" = "sha256-PnPMxYNQmtcNN0hGqqh6qf4Fz4EpVez6BHS2Zhzh9G0=";
         };
 
         otaripy = pkgs.rustPlatform.buildRustPackage {
