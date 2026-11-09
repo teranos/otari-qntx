@@ -1,9 +1,12 @@
-# otaripy's handler: attested to the node's ATS as predicate handler, context
-# otaripy, subject gateway, with this file as attributes.code. pyre reads @llm
-# and @route off it at Initialize; the work is in the otaripy module the
-# plugin's Python carries.
+# otaripy's handler: it comes with the build, as handlers/gateway.py beside the
+# binary. pyre reads @llm and @route off it at Initialize; the work is in the
+# otaripy module the plugin's Python carries.
 
 import otaripy
+
+# TODO(IMPLEMENTME): GET /v1/models is not served. openrouter-qntx served it,
+# and ground code's prompt.d (MODELS_PATH) reads each model's context_length
+# from it. Nothing calls it on otaripy today.
 
 
 @llm()
