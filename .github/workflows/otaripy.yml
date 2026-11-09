@@ -1,0 +1,94 @@
+{
+  "env": {
+    "VERIFY_IMAGE": "debian@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd"
+  },
+  "jobs": {
+    "linux-amd64": {
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/checkout@v5"
+        },
+        {
+          "uses": "cachix/install-nix-action@v30",
+          "with": {
+            "extra_nix_config": "experimental-features = nix-command flakes\n"
+          }
+        },
+        {
+          "name": "In-process check",
+          "run": "nix build .#checks.x86_64-linux.inprocess --show-trace -L",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Build plugin",
+          "run": "nix build .#otaripy --show-trace -L",
+          "working-directory": "otaripy"
+        },
+        {
+          "id": "version",
+          "name": "Resolve version",
+          "run": "VERSION=\"$(nix eval --raw .#otaripy.version)\"\necho \"version=$VERSION\" >> \"$GITHUB_OUTPUT\"\n",
+          "working-directory": "otaripy"
+        },
+        {
+          "id": "package",
+          "name": "Package",
+          "run": "ARTIFACT=\"qntx-otaripy-plugin-${{ steps.version.outputs.version }}-linux-amd64.tar.gz\"\nPATH=\"$(nix build nixpkgs#patchelf --no-link --print-out-paths)/bin:$PATH\" \\\n  ci/package.sh result release\ntar -czf \"$ARTIFACT\" -C release qntx-otaripy-plugin qntx-otaripy-plugin.bin lib/ python/ handlers/\nsha256sum \"$ARTIFACT\" > \"$ARTIFACT.sha256\"\necho \"artifact=$ARTIFACT\" >> \"$GITHUB_OUTPUT\"\n",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Verify the archive carries its handler",
+          "run": "tar -tzf \"${{ steps.package.outputs.artifact }}\" | grep -qx 'handlers/gateway.py' || {\n  echo \"the archive has no handlers/gateway.py beside the binary\" >&2\n  exit 1\n}\n",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Verify the archive is one the node can take",
+          "run": "ci/size.sh \"${{ steps.package.outputs.artifact }}\" release 150000000",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Verify no store paths remain",
+          "run": "BIN=release/qntx-otaripy-plugin.bin\nreadelf -l \"$BIN\" | grep 'Requesting program interpreter'\nif readelf -l \"$BIN\" | grep -q '/nix/store'; then\n  echo \"artifact still names a /nix/store interpreter\" >&2\n  exit 1\nfi\nif readelf -d \"$BIN\" | grep -q '/nix/store'; then\n  echo \"artifact still has /nix/store in its RPATH\" >&2\n  exit 1\nfi\n\n# The interpreters the tree carries, the same way, and the programs\n# each names by a store path: a launcher that execs one dies with\n# 255 and says nothing where /nix is absent (run 41956638205).\nfailed=0\nfor exe in release/python/bin/*; do\n  [ -f \"$exe\" ] || continue\n  # A script naming a store path, in its #! or anywhere: package.sh\n  # removes the venv's entry points, so none is left to.\n  if ! head -c 4 \"$exe\" | grep -q ELF; then\n    if grep -q '/nix/store' \"$exe\"; then\n      echo \"$exe is a script naming /nix/store: $(head -n 1 \"$exe\")\" >&2\n      failed=1\n    fi\n    continue\n  fi\n  echo \"== $exe\"\n  readelf -l \"$exe\" | grep 'Requesting program interpreter' || true\n  readelf -d \"$exe\" | grep -E 'RPATH|RUNPATH' || true\n  if readelf -l \"$exe\" | grep -q '/nix/store' || readelf -d \"$exe\" | grep -q '/nix/store'; then\n    echo \"$exe still names /nix/store as its interpreter or library path\" >&2\n    failed=1\n  fi\n  named=$(grep -a -o '/nix/store/[a-z0-9]\\{32\\}-[^/[:space:][:cntrl:]]*/bin/[A-Za-z0-9._-]*' \"$exe\" | sort -u || true)\n  if [ -n \"$named\" ]; then\n    echo \"$exe names programs by store path, which it may exec:\" >&2\n    echo \"$named\" >&2\n    failed=1\n  fi\ndone\nexit $failed\n",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Verify the tree asks for no glibc above the box's",
+          "run": "ci/glibc.sh release 2.41",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Verify artifact runs on the target",
+          "run": "rm -rf /tmp/verify && mkdir -p /tmp/verify\ntar -xzf \"${{ steps.package.outputs.artifact }}\" -C /tmp/verify\ndocker run --rm -v /tmp/verify:/plugin:ro \"$VERIFY_IMAGE\" \\\n  /plugin/qntx-otaripy-plugin --version\n\n# The interpreter as the launcher sets it up. Starting it and\n# importing are asked apart, and a failure says which, with what\n# the loader on the target makes of the binary.\ndocker run --rm -v /tmp/verify:/plugin:ro \"$VERIFY_IMAGE\" sh -c '\n  export PYTHONHOME=/plugin/python\n  export PYTHONPATH=/plugin/python/lib/python3.13:/plugin/python/lib/python3.13/site-packages\n  py=/plugin/python/bin/python3\n  ls -lL \"$py\"\n  \"$py\" -c \"import sys; print(sys.version, sys.prefix)\"\n  started=$?\n  if [ \"$started\" -ne 0 ]; then\n    echo \"the interpreter did not start, exit $started; the loader says:\" >&2\n    ldd \"$py\" >&2\n    exit 1\n  fi\n  \"$py\" -c \"import gateway.main, otaripy, httpx; print(otaripy.__file__)\"\n  imported=$?\n  if [ \"$imported\" -ne 0 ]; then\n    echo \"the interpreter started and the import failed, exit $imported\" >&2\n    exit 1\n  fi\n'\n\n# What was cut from the tree is not what otaripy runs on: the\n# in-process check, on the packaged tree, on the target. otari\n# starts, Chat is served, the gateway names its end user, the usage\n# record is read.\nCHECK=\"$(nix build .#inprocess-files --no-link --print-out-paths)\"\ndocker run --rm -v /tmp/verify:/plugin:ro -v \"$CHECK\":/check:ro \"$VERIFY_IMAGE\" sh -ec '\n  export PYTHONHOME=/plugin/python\n  export PYTHONPATH=/plugin/python/lib/python3.13:/plugin/python/lib/python3.13/site-packages\n  mkdir -p /tmp/scratch\n  /plugin/python/bin/python3 /check/inprocess.py /check/mock_openai.py /tmp/scratch\n'\n",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Upload artifact",
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "${{ steps.package.outputs.artifact }}",
+            "path": "otaripy/${{ steps.package.outputs.artifact }}\notaripy/${{ steps.package.outputs.artifact }}.sha256\n"
+          }
+        }
+      ]
+    }
+  },
+  "name": "otaripy",
+  "on": {
+    "push": {
+      "branches": [
+        "otaripy-is-otari-inside-pyre",
+        "plugin"
+      ],
+      "paths": [
+        "otaripy/**",
+        "ci/otaripy.nix",
+        ".github/workflows/otaripy.yml"
+      ]
+    },
+    "workflow_dispatch": null
+  },
+  "permissions": {
+    "contents": "read"
+  }
+}
