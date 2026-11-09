@@ -34,7 +34,12 @@
         {
           "id": "package",
           "name": "Package",
-          "run": "ARTIFACT=\"qntx-otaripy-plugin-${{ steps.version.outputs.version }}-linux-amd64.tar.gz\"\nPATH=\"$(nix build nixpkgs#patchelf --no-link --print-out-paths)/bin:$PATH\" \\\n  ci/package.sh result release\ntar -czf \"$ARTIFACT\" -C release qntx-otaripy-plugin qntx-otaripy-plugin.bin lib/ python/\nsha256sum \"$ARTIFACT\" > \"$ARTIFACT.sha256\"\necho \"artifact=$ARTIFACT\" >> \"$GITHUB_OUTPUT\"\n",
+          "run": "ARTIFACT=\"qntx-otaripy-plugin-${{ steps.version.outputs.version }}-linux-amd64.tar.gz\"\nPATH=\"$(nix build nixpkgs#patchelf --no-link --print-out-paths)/bin:$PATH\" \\\n  ci/package.sh result release\ntar -czf \"$ARTIFACT\" -C release qntx-otaripy-plugin qntx-otaripy-plugin.bin lib/ python/ handlers/\nsha256sum \"$ARTIFACT\" > \"$ARTIFACT.sha256\"\necho \"artifact=$ARTIFACT\" >> \"$GITHUB_OUTPUT\"\n",
+          "working-directory": "otaripy"
+        },
+        {
+          "name": "Verify the archive carries its handler",
+          "run": "tar -tzf \"${{ steps.package.outputs.artifact }}\" | grep -qx 'handlers/gateway.py' || {\n  echo \"the archive has no handlers/gateway.py beside the binary\" >&2\n  exit 1\n}\n",
           "working-directory": "otaripy"
         },
         {

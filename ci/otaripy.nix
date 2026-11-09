@@ -93,9 +93,23 @@ in
           ARTIFACT="qntx-otaripy-plugin-${version}-linux-amd64.tar.gz"
           PATH="$(nix build nixpkgs#patchelf --no-link --print-out-paths)/bin:$PATH" \
             ci/package.sh result release
-          tar -czf "$ARTIFACT" -C release qntx-otaripy-plugin qntx-otaripy-plugin.bin lib/ python/
+          tar -czf "$ARTIFACT" -C release qntx-otaripy-plugin qntx-otaripy-plugin.bin lib/ python/ handlers/
           sha256sum "$ARTIFACT" > "$ARTIFACT.sha256"
           echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+        '';
+      }
+
+      # The plugin's record names no namespace, so the handler it serves is
+      # the one the archive carries beside the binary: without it the plugin
+      # starts with pyre's built-in handlers alone and serves no route.
+      {
+        name = "Verify the archive carries its handler";
+        working-directory = "otaripy";
+        run = ''
+          tar -tzf "${artifact}" | grep -qx 'handlers/gateway.py' || {
+            echo "the archive has no handlers/gateway.py beside the binary" >&2
+            exit 1
+          }
         '';
       }
 
