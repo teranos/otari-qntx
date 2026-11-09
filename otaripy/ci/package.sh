@@ -162,6 +162,15 @@ patchelf \
     --set-rpath '$ORIGIN/lib' \
     "$OUT/qntx-otaripy-plugin.bin"
 
+# The handler the plugin serves comes with the build, beside the binary that
+# pyre reads handlers/<name>.py from, so the plugin's record names no
+# namespace and nothing is attested for it.
+HANDLER="$(dirname "$0")/../handlers/gateway.py"
+[ -f "$HANDLER" ] || { echo "no handler to carry at $HANDLER" >&2; exit 1; }
+mkdir -p "$OUT/handlers"
+install -m 0644 "$HANDLER" "$OUT/handlers/gateway.py"
+echo "handler: carried gateway.py"
+
 # Replaces nix's wrapper, which names store paths.
 cat > "$OUT/qntx-otaripy-plugin" <<'LAUNCHER'
 #!/bin/sh

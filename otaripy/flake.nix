@@ -65,7 +65,7 @@
 
         # The version. Compiled in, reported by the running plugin, and the
         # name the workflow's artifact is published under.
-        otaripyVersion = "0.2.1";
+        otaripyVersion = "0.3.0";
 
         otariSrc = pkgs.applyPatches {
           name = "otari-src-nix";
